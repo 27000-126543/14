@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安全运维管理系统</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.1/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        primary: {
+          50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+          400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+          800: '#1e40af', 900: '#1e3a8a'
+        }
+      }
+    }
+  }
+}
+</script>
+<style>
+  * { scrollbar-width: thin; scrollbar-color: #94a3b8 transparent; }
+  *::-webkit-scrollbar { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .dark body, body.dark { background: #0f172a; color: #e2e8f0; }
+  .sidebar-item.active { background: linear-gradient(90deg, rgba(59,130,246,0.15), transparent); border-left: 3px solid #3b82f6; }
+  .modal-backdrop { background: rgba(0,0,0,0.5); backdrop-filter: blur(2px); }
+  .kpi-card { transition: transform 0.2s, box-shadow 0.2s; }
+  .kpi-card:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+  .severity-critical { background: #fee2e2; color: #991b1b; }
+  .severity-high { background: #fed7aa; color: #9a3412; }
+  .severity-medium { background: #fef3c7; color: #92400e; }
+  .severity-low { background: #dcfce7; color: #166534; }
+  .dark .severity-critical { background: rgba(239,68,68,0.2); color: #fca5a5; }
+  .dark .severity-high { background: rgba(249,115,22,0.2); color: #fdba74; }
+  .dark .severity-medium { background: rgba(234,179,8,0.2); color: #fde047; }
+  .dark .severity-low { background: rgba(34,197,94,0.2); color: #86efac; }
+  .toast { animation: slideIn 0.3s ease-out; }
+  @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .fade-in { animation: fadeIn 0.25s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .star { color: #fbbf24; }
+  .star-empty { color: #d1d5db; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-200 min-h-screen">
+
+<!-- 登录弹窗 -->
+<div id="loginModal" class="fixed inset-0 z-50 flex items-center justify-center modal-backdrop">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-md fade-in">
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-16 h-16 bg-primary-100 dark:bg-primary-900 rounded-2xl mb-4">
+        <i class="fas fa-shield-halved text-3xl text-primary-600 dark:text-primary-400"></i>
+      </div>
+      <h2 class="text-2xl font-bold">安全运维管理系统</h2>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">请登录以继续</p>
+    </div>
+    <form id="loginForm" class="space-y-5">
+      <div>
+        <label class="block text-sm font-medium mb-2">用户名</label>
+        <div class="relative">
+          <i class="fas fa-user absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+          <input id="loginUsername" type="text" value="admin" class="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">密码</label>
+        <div class="relative">
+          <i class="fas fa-lock absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+          <input id="loginPassword" type="password" value="admin" class="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none">
+        </div>
+      </div>
+      <button type="submit" class="w-full py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
+        <i class="fas fa-right-to-bracket"></i> 登录
+      </button>
+    </form>
+    <p class="text-center text-xs text-slate-400 mt-6">默认账号：admin / admin</p>
+  </div>
+</div>
+
+<!-- 主应用 -->
+<div id="app" class="hidden flex h-screen overflow-hidden">
+  <!-- 侧边栏 -->
+  <aside id="sidebar" class="w-60 bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col shrink-0">
+    <div class="h-16 flex items-center px-5 border-b border-slate-200 dark:border-slate-700">
+      <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center mr-3">
+        <i class="fas fa-shield-halved text-white"></i>
+      </div>
+      <div>
+        <div class="font-bold text-sm">SecOps</div>
+        <div class="text-xs text-slate-500 dark:text-slate-400">安全运维平台</div>
+      </div>
+    </div>
+    <nav class="flex-1 py-3 overflow-y-auto">
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors active" data-view="dashboard">
+        <i class="fas fa-gauge-high w-5 mr-3 text-primary-600 dark:text-primary-400"></i> 仪表盘
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="vulnerabilities">
+        <i class="fas fa-bug w-5 mr-3 text-red-500"></i> 漏洞管理
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="work-orders">
+        <i class="fas fa-ticket w-5 mr-3 text-amber-500"></i> 工单管理
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="assets">
+        <i class="fas fa-server w-5 mr-3 text-blue-500"></i> 资产管理
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="incidents">
+        <i class="fas fa-triangle-exclamation w-5 mr-3 text-orange-500"></i> 安全事件
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="response-plans">
+        <i class="fas fa-shield-virus w-5 mr-3 text-rose-500"></i> 应急预案
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="review-tasks">
+        <i class="fas fa-clipboard-check w-5 mr-3 text-emerald-500"></i> 复盘任务
+      </a>
+      <a href="#" class="sidebar-item flex items-center px-5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors" data-view="reports">
+        <i class="fas fa-chart-column w-5 mr-3 text-purple-500"></i> 报表中心
+      </a>
+    </nav>
+    <div class="p-4 border-t border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
+      v1.0.0 © SecOps
+    </div>
+  </aside>
+
+  <!-- 主区域 -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <!-- 顶部栏 -->
+    <header class="h-16 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center px-6 justify-between shrink-0">
+      <div class="flex items-center gap-3">
+        <h1 id="viewTitle" class="text-lg font-semibold">仪表盘</h1>
+      </div>
+      <div class="flex items-center gap-3">
+        <button id="refreshBtn" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="刷新">
+          <i class="fas fa-rotate"></i>
+        </button>
+        <button id="themeToggle" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors" title="切换主题">
+          <i class="fas fa-moon dark:hidden"></i>
+          <i class="fas fa-sun hidden dark:inline"></i>
+        </button>
+        <div class="relative" id="userMenuWrap">
+          <button id="userMenuBtn" class="flex items-center gap-2 p-1.5 pr-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+            <div class="w-8 h-8 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white text-sm font-bold">A</div>
+            <span class="text-sm font-medium">admin</span>
+            <i class="fas fa-chevron-down text-xs text-slate-400"></i>
+          </button>
+          <div id="userMenu" class="hidden absolute right-0 top-full mt-2 w-44 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg py-1 z-40">
+            <a href="#" class="flex items-center px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50"><i class="fas fa-user w-4 mr-2 text-slate-400"></i> 个人资料</a>
+            <a href="#" class="flex items-center px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700/50"><i class="fas fa-gear w-4 mr-2 text-slate-400"></i> 系统设置</a>
+            <div class="border-t border-slate-200 dark:border-slate-700 my-1"></div>
+            <a href="#" id="logoutBtn" class="flex items-center px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20"><i class="fas fa-right-from-bracket w-4 mr-2"></i> 退出登录</a>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main class="flex-1 overflow-auto p-6 bg-slate-50 dark:bg-slate-900">
+
+      <!-- 仪表盘 -->
+      <section id="view-dashboard" class="view-section fade-in">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6" id="kpiGrid"></div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
+            <h3 class="font-semibold mb-4 flex items-center gap-2"><i class="fas fa-chart-pie text-red-500"></i> 漏洞严重等级分布</h3>
+            <canvas id="chartSeverity" height="220"></canvas>
+          </div>
+          <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
+            <h3 class="font-semibold mb-4 flex items-center gap-2"><i class="fas fa-chart-line text-blue-500"></i> 30天新增/修复趋势</h3>
+            <canvas id="chartTrend" height="220"></canvas>
+          </div>
+          <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
+            <h3 class="font-semibold mb-4 flex items-center gap-2"><i class="fas fa-chart-bar text-emerald-500"></i> 各部门修复率对比</h3>
+            <canvas id="chartDept" height="220"></canvas>
+          </div>
+          <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
+            <h3 class="font-semibold mb-4 flex items-center gap-2"><i class="fas fa-chart-donut text-amber-500"></i> 工单各阶段分布</h3>
+            <canvas id="chartWo" height="220"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- 漏洞管理 -->
+      <section id="view-vulnerabilities" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <div class="relative flex-1 min-w-[200px]">
+              <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <input id="vulnSearch" type="text" placeholder="搜索CVE/标题..." class="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
+            </div>
+            <select id="vulnSeverity" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部等级</option>
+              <option value="critical">严重</option>
+              <option value="high">高危</option>
+              <option value="medium">中危</option>
+              <option value="low">低危</option>
+            </select>
+            <select id="vulnStatus" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部状态</option>
+              <option value="active">活跃</option>
+              <option value="mitigated">已缓解</option>
+              <option value="fixed">已修复</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <input id="vulnDateFrom" type="date" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+            <span class="text-slate-400 text-sm">至</span>
+            <input id="vulnDateTo" type="date" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+            <div class="ml-auto flex gap-2">
+              <button id="vulnAddBtn" class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded-lg flex items-center gap-2"><i class="fas fa-plus"></i> 新增漏洞</button>
+              <button class="px-4 py-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm rounded-lg flex items-center gap-2"><i class="fas fa-file-import"></i> 批量导入</button>
+              <button class="px-4 py-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm rounded-lg flex items-center gap-2"><i class="fas fa-file-export"></i> 导出</button>
+              <button id="vulnRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">ID</th>
+                  <th class="px-4 py-3 text-left font-medium">CVE</th>
+                  <th class="px-4 py-3 text-left font-medium">标题</th>
+                  <th class="px-4 py-3 text-left font-medium">等级</th>
+                  <th class="px-4 py-3 text-left font-medium">风险分</th>
+                  <th class="px-4 py-3 text-left font-medium">资产</th>
+                  <th class="px-4 py-3 text-left font-medium">状态</th>
+                  <th class="px-4 py-3 text-left font-medium">修复截止</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="vulnTableBody"></tbody>
+            </table>
+          </div>
+          <div id="vulnPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 工单管理 -->
+      <section id="view-work-orders" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <select id="woStatus" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部状态</option>
+              <option value="pending">待修复</option>
+              <option value="fixing">修复中</option>
+              <option value="fixed">已修复</option>
+              <option value="verifying">验证中</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <select id="woAssignee" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部负责人</option>
+              <option value="user1">user1</option>
+              <option value="user2">user2</option>
+              <option value="user4">user4</option>
+              <option value="user7">user7</option>
+              <option value="user8">user8</option>
+            </select>
+            <select id="woDept" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部部门</option>
+              <option value="运维部">运维部</option>
+              <option value="研发部">研发部</option>
+              <option value="测试部">测试部</option>
+              <option value="产品部">产品部</option>
+            </select>
+            <select id="woSeverity" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部等级</option>
+              <option value="critical">严重</option>
+              <option value="high">高危</option>
+              <option value="medium">中危</option>
+              <option value="low">低危</option>
+            </select>
+            <label class="flex items-center gap-2 text-sm"><input id="woTimeout" type="checkbox" class="rounded"> 仅超时</label>
+            <div class="ml-auto flex gap-2">
+              <button class="px-4 py-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 text-sm rounded-lg flex items-center gap-2"><i class="fas fa-file-export"></i> 导出</button>
+              <button id="woRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">工单号</th>
+                  <th class="px-4 py-3 text-left font-medium">漏洞</th>
+                  <th class="px-4 py-3 text-left font-medium">资产</th>
+                  <th class="px-4 py-3 text-left font-medium">负责人</th>
+                  <th class="px-4 py-3 text-left font-medium">状态</th>
+                  <th class="px-4 py-3 text-left font-medium">风险等级</th>
+                  <th class="px-4 py-3 text-left font-medium">创建时间</th>
+                  <th class="px-4 py-3 text-left font-medium">截止时间</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="woTableBody"></tbody>
+            </table>
+          </div>
+          <div id="woPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 资产管理 -->
+      <section id="view-assets" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <div class="relative flex-1 min-w-[200px]">
+              <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"></i>
+              <input id="assetSearch" type="text" placeholder="搜索名称/IP..." class="w-full pl-10 pr-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none focus:ring-2 focus:ring-primary-500">
+            </div>
+            <select id="assetImportance" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部重要性</option>
+              <option value="5">5星</option>
+              <option value="4">4星</option>
+              <option value="3">3星</option>
+              <option value="2">2星</option>
+              <option value="1">1星</option>
+            </select>
+            <select id="assetType" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部类型</option>
+              <option value="web_server">Web服务器</option>
+              <option value="database">数据库</option>
+              <option value="application">应用服务器</option>
+            </select>
+            <select id="assetDept" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部部门</option>
+              <option value="运维部">运维部</option>
+              <option value="研发部">研发部</option>
+              <option value="测试部">测试部</option>
+              <option value="产品部">产品部</option>
+            </select>
+            <div class="ml-auto flex gap-2">
+              <button id="assetAddBtn" class="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm rounded-lg flex items-center gap-2"><i class="fas fa-plus"></i> 新增资产</button>
+              <button id="assetRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">ID</th>
+                  <th class="px-4 py-3 text-left font-medium">名称</th>
+                  <th class="px-4 py-3 text-left font-medium">IP</th>
+                  <th class="px-4 py-3 text-left font-medium">类型</th>
+                  <th class="px-4 py-3 text-left font-medium">重要性</th>
+                  <th class="px-4 py-3 text-left font-medium">负责人</th>
+                  <th class="px-4 py-3 text-left font-medium">部门</th>
+                  <th class="px-4 py-3 text-left font-medium">漏洞数</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="assetTableBody"></tbody>
+            </table>
+          </div>
+          <div id="assetPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 安全事件 -->
+      <section id="view-incidents" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <select id="incType" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部类型</option>
+              <option value="data_breach">数据泄露</option>
+              <option value="malware">恶意软件</option>
+              <option value="unauthorized_access">未授权访问</option>
+              <option value="dos_attack">DoS攻击</option>
+              <option value="phishing">钓鱼</option>
+              <option value="other">其他</option>
+            </select>
+            <select id="incSeverity" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部等级</option>
+              <option value="critical">严重</option>
+              <option value="high">高危</option>
+              <option value="medium">中危</option>
+              <option value="low">低危</option>
+            </select>
+            <select id="incStatus" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部状态</option>
+              <option value="open">待处理</option>
+              <option value="investigating">调查中</option>
+              <option value="contained">已遏制</option>
+              <option value="eradicated">已根除</option>
+              <option value="recovered">已恢复</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <div class="ml-auto">
+              <button id="incRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">ID</th>
+                  <th class="px-4 py-3 text-left font-medium">标题</th>
+                  <th class="px-4 py-3 text-left font-medium">类型</th>
+                  <th class="px-4 py-3 text-left font-medium">等级</th>
+                  <th class="px-4 py-3 text-left font-medium">状态</th>
+                  <th class="px-4 py-3 text-left font-medium">受影响资产</th>
+                  <th class="px-4 py-3 text-left font-medium">创建时间</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="incTableBody"></tbody>
+            </table>
+          </div>
+          <div id="incPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 应急预案 -->
+      <section id="view-response-plans" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <select id="rpStatus" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部状态</option>
+              <option value="created">已创建</option>
+              <option value="confirmed">已确认</option>
+              <option value="executing">执行中</option>
+              <option value="completed">已完成</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <div class="ml-auto">
+              <button id="rpRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">ID</th>
+                  <th class="px-4 py-3 text-left font-medium">漏洞</th>
+                  <th class="px-4 py-3 text-left font-medium">受影响资产</th>
+                  <th class="px-4 py-3 text-left font-medium">状态</th>
+                  <th class="px-4 py-3 text-left font-medium">创建时间</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="rpTableBody"></tbody>
+            </table>
+          </div>
+          <div id="rpPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 复盘任务 -->
+      <section id="view-review-tasks" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <select id="rtStatus" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部状态</option>
+              <option value="pending_analysis">待分析</option>
+              <option value="in_analysis">分析中</option>
+              <option value="completed">已完成</option>
+              <option value="confirmed">已确认</option>
+            </select>
+            <select id="rtReason" class="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-700 text-sm outline-none">
+              <option value="">全部触发原因</option>
+              <option value="verify_failed_twice">验证失败2次</option>
+              <option value="high_risk_overdue">高危超时</option>
+              <option value="widespread_vuln">广泛传播漏洞</option>
+            </select>
+            <div class="ml-auto">
+              <button id="rtRefreshBtn" class="p-2 border border-slate-300 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 rounded-lg"><i class="fas fa-rotate"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">ID</th>
+                  <th class="px-4 py-3 text-left font-medium">关联漏洞</th>
+                  <th class="px-4 py-3 text-left font-medium">触发原因</th>
+                  <th class="px-4 py-3 text-left font-medium">状态</th>
+                  <th class="px-4 py-3 text-left font-medium">截止时间</th>
+                  <th class="px-4 py-3 text-left font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody id="rtTableBody"></tbody>
+            </table>
+          </div>
+          <div id="rtPagination" class="px-4 py-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between"></div>
+        </div>
+      </section>
+
+      <!-- 报表中心 -->
+      <section id="view-reports" class="view-section hidden fade-in">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 mb-6">
+          <h3 class="font-semibold mb-4">当前周期统计摘要</h3>
+          <div id="reportSummary" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 mb-6">
+          <h3 class="font-semibold mb-4">生成报表</h3>
+          <div class="flex gap-3">
+            <button id="genDailyBtn" class="px-5 py-2.5 bg-primary-600 hover:bg-primary-700 text-white rounded-lg flex items-center gap-2"><i class="fas fa-file-lines"></i> 生成日报</button>
+            <button id="genWeeklyBtn" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center gap-2"><i class="fas fa-calendar-week"></i> 生成周报</button>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+          <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 font-semibold">历史报表</div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th class="px-4 py-3 text-left font-medium">报表类型</th>
+                  <th class="px-4 py-3 text-left font-medium">周期</th>
+                  <th class="px-4 py-3 text-left font-medium">生成时间</th>
+                  <th class="px-4 py-3 text-left font-medium">生成人</th>
+                  <th class="px-4 py-3 text-left font-medium">下载</th>
+                </tr>
+              </thead>
+              <tbody id="reportTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- 通用弹窗容器 -->
+<div id="modalContainer"></div>
+
+<!-- Toast容器 -->
+<div id="toastContainer" class="fixed top-5 right-5 z-[100] space-y-2"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
