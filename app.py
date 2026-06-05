@@ -9,7 +9,7 @@ import enum
 from flask import Flask, Blueprint, request, jsonify, render_template, send_from_directory, redirect, url_for
 from flask_cors import CORS
 from sqlalchemy import func, and_, or_, case
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from config import config
 from database import db_manager
@@ -938,12 +938,24 @@ def create_work_order():
             return error("创建工单失败", code=500, status_code=500)
 
         with db_manager.get_session() as session:
-            wo = session.query(WorkOrder).filter_by(id=new_wo.id).first()
+            wo = (
+                session.query(WorkOrder)
+                .options(
+                    joinedload(WorkOrder.vuln_instance)
+                    .joinedload(VulnerabilityInstance.vulnerability),
+                    joinedload(WorkOrder.vuln_instance)
+                    .joinedload(VulnerabilityInstance.asset),
+                    joinedload(WorkOrder.notifications),
+                    joinedload(WorkOrder.escalation_records),
+                )
+                .filter_by(id=new_wo.id)
+                .first()
+            )
             if wo and data.get("assignee"):
                 wo.assignee = data["assignee"]
                 wo.updated_at = datetime.now(timezone.utc)
                 session.flush()
-            wo_dict = work_order_to_dict(wo) if wo else None
+            wo_dict = work_order_to_dict(wo, include_relations=True) if wo else None
 
         return success(wo_dict, "创建成功")
     except Exception as e:
@@ -1098,11 +1110,15 @@ def escalate_work_order(wo_id):
     try:
         data = request.get_json() or {}
         user = get_current_user() or "system"
-        level = data.get("level", type=int)
+        level_raw = data.get("level")
         reason = data.get("reason", "")
 
-        if level is None:
+        if level_raw is None:
             return error("缺少 level 参数", code=400, status_code=400)
+        try:
+            level = int(level_raw)
+        except (ValueError, TypeError):
+            return error("level 必须是整数", code=400, status_code=400)
 
         with db_manager.get_session() as session:
             wo = session.query(WorkOrder).filter_by(id=wo_id).first()
@@ -2140,6 +2156,194 @@ app.register_blueprint(dashboard_bp)
 report_bp = Blueprint("reports", __name__, url_prefix="/api/reports")
 
 
+@report_bp.route("/summary", methods=["GET"])
+@login_required
+def reports_summary():
+    try:
+        with db_manager.get_session() as session:
+            now = datetime.now(timezone.utc)
+            today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            week_ago = today_start - timedelta(days=7)
+
+            total_vulns = session.query(func.count(VulnerabilityInstance.id)).scalar() or 0
+            pending_vulns = (
+                session.query(func.count(VulnerabilityInstance.id))
+                .filter(VulnerabilityInstance.fix_status == FixStatusEnum.PENDING)
+                .scalar() or 0
+            )
+            fixed_vulns = (
+                session.query(func.count(VulnerabilityInstance.id))
+                .filter(VulnerabilityInstance.fix_status == FixStatusEnum.VERIFIED)
+                .scalar() or 0
+            )
+            fix_rate = round((fixed_vulns / total_vulns * 100), 2) if total_vulns > 0 else 0.0
+
+            total_work_orders = session.query(func.count(WorkOrder.id)).scalar() or 0
+            active_work_orders = (
+                session.query(func.count(WorkOrder.id))
+                .filter(WorkOrder.status.notin_([WorkOrderStatusEnum.CLOSED]))
+                .scalar() or 0
+            )
+            overdue_work_orders = (
+                session.query(func.count(WorkOrder.id))
+                .filter(WorkOrder.status.notin_([WorkOrderStatusEnum.CLOSED]))
+                .filter(WorkOrder.deadline < now)
+                .scalar() or 0
+            )
+            overdue_rate = round((overdue_work_orders / active_work_orders * 100), 2) if active_work_orders > 0 else 0.0
+
+            severity_results = (
+                session.query(Vulnerability.severity, func.count(VulnerabilityInstance.id))
+                .join(VulnerabilityInstance, VulnerabilityInstance.vuln_id == Vulnerability.id)
+                .group_by(Vulnerability.severity)
+                .all()
+            )
+            severity_labels = {"critical": "严重", "high": "高危", "medium": "中危", "low": "低危", "info": "信息"}
+            severity_distribution = []
+            for sev, cnt in severity_results:
+                severity_distribution.append({
+                    "key": sev,
+                    "name": severity_labels.get(sev, sev),
+                    "value": cnt
+                })
+
+            stage_results = (
+                session.query(WorkOrder.status, func.count(WorkOrder.id))
+                .group_by(WorkOrder.status)
+                .all()
+            )
+            stage_labels = {
+                "pending": "待修复",
+                "in_progress": "修复中",
+                "fixed": "已修复",
+                "verifying": "验证中",
+                "closed": "已关闭"
+            }
+            workorder_stage = []
+            for st, cnt in stage_results:
+                workorder_stage.append({
+                    "key": st.value,
+                    "name": stage_labels.get(st.value, st.value),
+                    "value": cnt
+                })
+
+            asset_type_results = (
+                session.query(Asset.type, func.count(VulnerabilityInstance.id))
+                .join(VulnerabilityInstance, VulnerabilityInstance.asset_id == Asset.id)
+                .group_by(Asset.type)
+                .all()
+            )
+            asset_type_labels = {
+                "web_server": "Web服务器",
+                "database": "数据库",
+                "application": "应用系统",
+                "network": "网络设备",
+                "file_server": "文件服务器",
+                "other": "其他"
+            }
+            asset_type_distribution = []
+            for at, cnt in asset_type_results:
+                asset_type_distribution.append({
+                    "key": at,
+                    "name": asset_type_labels.get(at, at),
+                    "value": cnt
+                })
+
+            trend_days = []
+            for i in range(6, -1, -1):
+                day_start = today_start - timedelta(days=i)
+                day_end = day_start + timedelta(days=1)
+                day_new = (
+                    session.query(func.count(VulnerabilityInstance.id))
+                    .filter(VulnerabilityInstance.discovery_time >= day_start)
+                    .filter(VulnerabilityInstance.discovery_time < day_end)
+                    .scalar() or 0
+                )
+                day_fixed = (
+                    session.query(func.count(WorkOrder.id))
+                    .filter(WorkOrder.fixed_at >= day_start)
+                    .filter(WorkOrder.fixed_at < day_end)
+                    .scalar() or 0
+                )
+                trend_days.append({
+                    "date": day_start.strftime("%m-%d"),
+                    "new": day_new,
+                    "fixed": day_fixed
+                })
+
+            dept_results = (
+                session.query(Asset.department,
+                              func.count(VulnerabilityInstance.id),
+                              func.sum(case((VulnerabilityInstance.fix_status == FixStatusEnum.VERIFIED, 1), else_=0)))
+                .join(VulnerabilityInstance, VulnerabilityInstance.asset_id == Asset.id)
+                .group_by(Asset.department)
+                .all()
+            )
+            department_stats = []
+            for dept, total_d, fixed_d in dept_results:
+                total_d = total_d or 0
+                fixed_d = fixed_d or 0
+                department_stats.append({
+                    "department": dept or "未分配",
+                    "total": total_d,
+                    "fixed": fixed_d,
+                    "fix_rate": round((fixed_d / total_d * 100), 2) if total_d > 0 else 0.0
+                })
+
+            top_high_risk = (
+                session.query(VulnerabilityInstance)
+                .order_by(VulnerabilityInstance.risk_score.desc())
+                .limit(10)
+                .all()
+            )
+            top_high_risk_list = []
+            for vi in top_high_risk:
+                vuln = session.query(Vulnerability).filter_by(id=vi.vuln_id).first()
+                asset = session.query(Asset).filter_by(id=vi.asset_id).first()
+                top_high_risk_list.append({
+                    "id": vi.id,
+                    "title": vuln.title if vuln else f"漏洞#{vi.vuln_id}",
+                    "severity": vuln.severity.value if vuln and vuln.severity else None,
+                    "risk_score": vi.risk_score,
+                    "asset_name": asset.name if asset else f"资产#{vi.asset_id}",
+                    "asset_ip": asset.ip if asset else None,
+                    "fix_status": vi.fix_status.value,
+                    "discovery_time": vi.discovery_time.isoformat() if vi.discovery_time else None
+                })
+
+            recent_reports = (
+                session.query(Report)
+                .order_by(Report.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            recent_reports_list = [report_to_dict(r) for r in recent_reports]
+
+        return success({
+            "overview": {
+                "total_vulns": total_vulns,
+                "pending_vulns": pending_vulns,
+                "fixed_vulns": fixed_vulns,
+                "fix_rate": fix_rate,
+                "total_work_orders": total_work_orders,
+                "active_work_orders": active_work_orders,
+                "overdue_work_orders": overdue_work_orders,
+                "overdue_rate": overdue_rate,
+                "generated_at": now.isoformat()
+            },
+            "severity_distribution": severity_distribution,
+            "workorder_stage": workorder_stage,
+            "asset_type_distribution": asset_type_distribution,
+            "trend_days": trend_days,
+            "department_stats": department_stats,
+            "top_high_risk": top_high_risk_list,
+            "recent_reports": recent_reports_list
+        })
+    except Exception as e:
+        logger.exception(f"Reports summary error: {e}")
+        return error(f"查询失败: {str(e)}", code=500, status_code=500)
+
+
 @report_bp.route("/generate", methods=["GET"])
 @login_required
 def generate_report():
@@ -2425,14 +2629,13 @@ def update_plan_measures(plan_id):
         data = request.get_json() or {}
         user = get_current_user() or "system"
         measure_type = data.get("measure_type", "isolation")
-        measure_id_raw = data.get("measure_id")
         new_status_str = data.get("status", "in_progress")
         remark = data.get("remark", "")
 
-        if measure_id_raw is None:
+        if "measure_id" not in data or data["measure_id"] is None:
             return error("缺少 measure_id 参数", code=400, status_code=400)
         try:
-            measure_id = int(measure_id_raw)
+            measure_id = int(data["measure_id"])
         except (ValueError, TypeError):
             return error("measure_id 必须是整数", code=400, status_code=400)
 
