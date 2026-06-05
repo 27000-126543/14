@@ -933,18 +933,19 @@ def create_work_order():
         if not vuln_instance_id:
             return error("缺少 vuln_instance_id 参数", code=400, status_code=400)
 
-        wo = work_order_creator.create(vuln_instance_id, operator=user)
-        if not wo:
+        new_wo = work_order_creator.create(vuln_instance_id, operator=user)
+        if not new_wo:
             return error("创建工单失败", code=500, status_code=500)
 
-        if data.get("assignee"):
-            with db_manager.get_session() as session:
-                wo_db = session.query(WorkOrder).filter_by(id=wo.id).first()
-                if wo_db:
-                    wo_db.assignee = data["assignee"]
-                    wo_db.updated_at = datetime.now(timezone.utc)
+        with db_manager.get_session() as session:
+            wo = session.query(WorkOrder).filter_by(id=new_wo.id).first()
+            if wo and data.get("assignee"):
+                wo.assignee = data["assignee"]
+                wo.updated_at = datetime.now(timezone.utc)
+                session.flush()
+            wo_dict = work_order_to_dict(wo) if wo else None
 
-        return success(work_order_to_dict(wo), "创建成功")
+        return success(wo_dict, "创建成功")
     except Exception as e:
         logger.exception(f"Create work order error: {e}")
         return error(f"创建失败: {str(e)}", code=500, status_code=500)

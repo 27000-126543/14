@@ -2,7 +2,7 @@ from contextlib import contextmanager
 from typing import Generator, List, Dict, Any, Optional, Type, TypeVar
 from functools import wraps
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, text, and_
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
@@ -32,15 +32,25 @@ def get_engine() -> Engine:
     engine = create_engine(db_url, **engine_kwargs)
 
     if config.database.DB_TYPE == "sqlite":
+        try:
+            from sqlalchemy.dialects.sqlite import aiosqlite  # noqa
+        except Exception:
+            pass
+        engine.dialect.supports_returning = False
+        engine.dialect.supports_empty_insert = False
+
         @event.listens_for(engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=-20000")
-            cursor.execute("PRAGMA temp_store=MEMORY")
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+            try:
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA cache_size=-20000")
+                cursor.execute("PRAGMA temp_store=MEMORY")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+            except Exception:
+                pass
 
     return engine
 
@@ -185,16 +195,26 @@ class DatabaseManager:
                     total_processed += result.rowcount
                 else:
                     for item in batch:
-                        filter_dict = {col: item[col] for col in conflict_columns}
-                        existing = session.query(model).filter_by(**filter_dict).first()
-                        if existing:
-                            for key, value in item.items():
-                                if hasattr(existing, key) and key not in conflict_columns and key != "created_at":
-                                    setattr(existing, key, value)
-                        else:
-                            session.add(model(**item))
-                        total_processed += 1
-                    session.flush()
+                        try:
+                            filter_stmt = []
+                            for col in conflict_columns:
+                                val = item.get(col)
+                                if val is not None:
+                                    filter_stmt.append(getattr(model, col) == val)
+                                else:
+                                    filter_stmt.append(getattr(model, col).is_(None))
+                            existing = session.query(model).filter(and_(*filter_stmt)).first()
+                            if existing:
+                                for key, value in item.items():
+                                    if hasattr(existing, key) and key not in conflict_columns and key != "created_at":
+                                        setattr(existing, key, value)
+                            else:
+                                session.add(model(**item))
+                            total_processed += 1
+                            session.flush()
+                        except IntegrityError:
+                            session.rollback()
+                            continue
             except SQLAlchemyError as e:
                 session.rollback()
                 raise e
